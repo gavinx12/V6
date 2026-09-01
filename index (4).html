@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>累計生產狀況</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f4f7fb;color:#172033;font-family:Arial,"Microsoft JhengHei",sans-serif}
+.container{max-width:1100px;margin:auto;padding:24px}
+.header{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.header h1{margin:0;font-size:30px;font-weight:800}
+.card{background:#fff;border-radius:16px;padding:20px;margin-bottom:18px;box-shadow:0 3px 14px rgba(0,0,0,.07)}
+h2{margin:0 0 16px;font-size:20px}
+.form-grid{display:grid;grid-template-columns:1.5fr 1fr 1fr auto;gap:12px;align-items:end}
+label{display:block;font-size:13px;color:#667085;margin-bottom:6px}
+input,select,button{font:inherit}
+input,select{width:100%;height:46px;border:1px solid #cfd6df;border-radius:9px;padding:0 12px;font-size:16px;background:#fff}
+button{height:44px;border:0;border-radius:9px;padding:0 18px;font-weight:700;cursor:pointer}
+.primary{background:#456fe8;color:#fff}
+.secondary{background:#eef2f7;color:#172033}
+.danger{background:#fff0f0;color:#c62828}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:650px}
+th,td{padding:17px 14px;border-bottom:1px solid #e5e7eb;text-align:right}
+th:first-child,td:first-child{text-align:left}
+th{color:#667085;font-size:14px}
+.part{font-weight:800;font-size:17px}
+.done{color:#009b63;font-weight:800}
+.ng{color:#dc2626;font-weight:800}
+.empty{text-align:center!important;color:#98a2b3;padding:30px}
+.history-item{padding:12px 0;border-bottom:1px solid #e5e7eb}
+.history-item:last-child{border-bottom:0}
+.history-date{font-weight:800;margin-bottom:6px}
+.small{font-size:13px;color:#667085}
+.notice{font-size:13px;color:#667085;line-height:1.6}
+@media(max-width:700px){
+ .container{padding:12px}
+ .form-grid{grid-template-columns:1fr 1fr}
+ .form-grid .full{grid-column:1/-1}
+ .header h1{font-size:24px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- 這一區就是截圖範圍：只會截到 NG 欄 -->
+  <div id="screenshotArea" class="card">
+    <div class="header">
+      <div style="font-size:30px">📊</div>
+      <h1 id="pageTitle">累計生產狀況</h1>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>料號</th>
+            <th>總數</th>
+            <th>已完成</th>
+            <th>剩餘</th>
+            <th>NG</th>
+          </tr>
+        </thead>
+        <tbody id="summaryBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>📝 今日生產回報</h2>
+    <div class="form-grid">
+      <div>
+        <label>料號</label>
+        <select id="partSelect"></select>
+      </div>
+      <div>
+        <label>今日良品數</label>
+        <input id="goodInput" type="number" min="0" step="1" placeholder="例如 100">
+      </div>
+      <div>
+        <label>今日 NG 數</label>
+        <input id="ngInput" type="number" min="0" step="1" placeholder="例如 2">
+      </div>
+      <button class="primary" onclick="addTodayRecord()">送出</button>
+    </div>
+    <div class="actions">
+      <button class="secondary" onclick="takeScreenshot()">📷 截圖累計資訊</button>
+      <button class="secondary" onclick="undoToday()">↩️ 撤銷今天最後一筆</button>
+      <button class="danger" onclick="resetAll()">重設全部資料</button>
+    </div>
+    <p class="notice">
+      規則：沒輸入的欄位不更新；每次送出的良品會累加到「已完成」，NG 會累加到「NG」；
+      「剩餘」＝總數－已完成。資料會保存在目前瀏覽器中。
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>📅 今日送出紀錄</h2>
+    <div id="todayRecords"></div>
+  </div>
+
+  <div class="card">
+    <h2>📚 歷史紀錄</h2>
+    <div id="historyRecords"></div>
+  </div>
+
+</div>
+
+<script>
+const STORAGE_KEY = "production-management-v5-data";
+
+const DEFAULT_DATA = {
+  parts: {
+    "OS51B00272": {total:3114, done:960, ng:9},
+    "OS51B00273": {total:2784, done:1274, ng:105}
+  },
+  history: []
+};
+
+function clone(obj){ return JSON.parse(JSON.stringify(obj)); }
+
+function loadData(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return clone(DEFAULT_DATA);
+    const data = JSON.parse(raw);
+    if(!data.parts || !data.history) return clone(DEFAULT_DATA);
+    return data;
+  }catch(e){
+    return clone(DEFAULT_DATA);
+  }
+}
+
+let data = loadData();
+
+function saveData(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function today(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function displayDate(){
+  const d = new Date();
+  return `${d.getMonth()+1}/${d.getDate()}`;
+}
+
+function fmt(n){ return Number(n).toLocaleString("en-US"); }
+
+function render(){
+  document.getElementById("pageTitle").textContent = `${displayDate()} 累計生產狀況`;
+
+  const select = document.getElementById("partSelect");
+  const old = select.value;
+  select.innerHTML = "";
+  Object.keys(data.parts).forEach(part=>{
+    const op = document.createElement("option");
+    op.value = part;
+    op.textContent = part;
+    select.appendChild(op);
+  });
+  if(data.parts[old]) select.value = old;
+
+  const body = document.getElementById("summaryBody");
+  body.innerHTML = "";
+  const parts = Object.entries(data.parts);
+
+  if(parts.length === 0){
+    body.innerHTML = '<tr><td colspan="5" class="empty">目前沒有料號</td></tr>';
+  }else{
+    parts.forEach(([part,x])=>{
+      const remaining = Math.max(0, x.total - x.done);
+      body.innerHTML += `
+        <tr>
+          <td class="part">${part}</td>
+          <td>${fmt(x.total)}</td>
+          <td class="done">${fmt(x.done)}</td>
+          <td>${fmt(remaining)}</td>
+          <td class="ng">${fmt(x.ng)}</td>
+        </tr>`;
+    });
+  }
+
+  renderToday();
+  renderHistory();
+}
+
+function addTodayRecord(){
+  const part = document.getElementById("partSelect").value;
+  const goodRaw = document.getElementById("goodInput").value.trim();
+  const ngRaw = document.getElementById("ngInput").value.trim();
+
+  if(!part){
+    alert("請先選擇料號");
+    return;
+  }
+  if(goodRaw === "" && ngRaw === ""){
+    alert("請至少輸入今日良品數或 NG 數");
+    return;
+  }
+
+  const good = goodRaw === "" ? 0 : Number(goodRaw);
+  const ng = ngRaw === "" ? 0 : Number(ngRaw);
+
+  if(!Number.isInteger(good) || good < 0 || !Number.isInteger(ng) || ng < 0){
+    alert("數量請輸入 0 以上的整數");
+    return;
+  }
+
+  const item = data.parts[part];
+  item.done += good;
+  item.ng += ng;
+
+  data.history.unshift({
+    id: Date.now(),
+    date: today(),
+    part,
+    good,
+    ng
+  });
+
+  saveData();
+  document.getElementById("goodInput").value = "";
+  document.getElementById("ngInput").value = "";
+  render();
+}
+
+function renderToday(){
+  const el = document.getElementById("todayRecords");
+  const records = data.history.filter(x=>x.date === today());
+
+  if(records.length === 0){
+    el.innerHTML = '<div class="small">今天尚未送出資料。</div>';
+    return;
+  }
+
+  el.innerHTML = records.map((r,i)=>`
+    <div class="history-item">
+      <div class="history-date">${i+1}. ${r.part}</div>
+      <div class="small">
+        良品 +${fmt(r.good)}　｜　NG +${fmt(r.ng)}
+       　｜　${r.date}
+      </div>
+    </div>`).join("");
+}
+
+function renderHistory(){
+  const el = document.getElementById("historyRecords");
+  if(data.history.length === 0){
+    el.innerHTML = '<div class="small">尚無歷史紀錄。</div>';
+    return;
+  }
+
+  const groups = {};
+  data.history.forEach(r=>{
+    if(!groups[r.date]) groups[r.date] = [];
+    groups[r.date].push(r);
+  });
+
+  el.innerHTML = Object.keys(groups).sort().reverse().map(date=>{
+    const rows = groups[date].map(r=>
+      `<div class="small">${r.part}　良品 +${fmt(r.good)}　NG +${fmt(r.ng)}</div>`
+    ).join("");
+    return `<div class="history-item"><div class="history-date">${date}</div>${rows}</div>`;
+  }).join("");
+}
+
+function undoToday(){
+  const idx = data.history.findIndex(r=>r.date === today());
+  if(idx === -1){
+    alert("今天沒有可以撤銷的紀錄");
+    return;
+  }
+
+  const r = data.history[idx];
+  if(!confirm(`確定撤銷 ${r.part} 的最後一筆？\n良品 -${r.good}、NG -${r.ng}`)) return;
+
+  data.parts[r.part].done -= r.good;
+  data.parts[r.part].ng -= r.ng;
+  data.history.splice(idx,1);
+
+  saveData();
+  render();
+}
+
+async function takeScreenshot(){
+  const area = document.getElementById("screenshotArea");
+  if(typeof html2canvas === "undefined"){
+    alert("截圖功能尚未載入完成，請稍候再試。");
+    return;
+  }
+
+  try{
+    const canvas = await html2canvas(area,{
+      scale: 2,
+      backgroundColor: "#ffffff",
+      useCORS: true,
+      logging: false
+    });
+
+    const link = document.createElement("a");
+    link.download = `累計生產狀況_${today()}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }catch(e){
+    alert("截圖失敗，請重新整理網頁後再試。");
+  }
+}
+
+function resetAll(){
+  if(!confirm("確定要清除目前瀏覽器內的所有累計與歷史紀錄嗎？")) return;
+  data = clone(DEFAULT_DATA);
+  saveData();
+  render();
+}
+
+render();
+</script>
+</body>
+</html>
